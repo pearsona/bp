@@ -22,12 +22,12 @@ solv = svmc
 mess = {0: {0: {-1: 1.5, 1: 2.0}, 1: {-1: 1.0, 1: 0.75}}} 
 
 # allow bp to run for 10 iterations
-iter = 10
+num_iter = 10
 
 # print all messages and beliefs as they're updated
 verb = True
 
-min_sum_BP(g = my_factor_graph, solver = solv, init_mess = mess, max_iter = iter, verbose = verb)
+min_sum_BP(g = my_factor_graph, solver = solv, init_mess = mess, max_iter = num_iter, verbose = verb)
 ```
 
 
