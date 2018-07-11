@@ -36,7 +36,7 @@ This is the class (a child of [networkx](https://networkx.github.io/)) that defi
 
 Usage example:
 
-Create a basic qubo factor graph and then convert it into an ising factor graph
+1) Create a basic qubo factor graph and then convert it into an ising factor graph
 ```python
 from FactorGraph import *
 
@@ -45,6 +45,11 @@ g.add_factor(0, {'const': -1.0, 0: -1.0, 1: -1.0, (0, 1): -1.0, 'num vars': 2})
 g.add_factor(1, {'const': -2.0, 1: 1.0, (1, 2): -3.0, 'num vars': 2})
 
 g.graph_qubo_2_ising()
+```
+2) Define the potential: -2 + x<sub>1</sub> - 3x<sub>1</sub>x<sub>2</sub>
+<br>NOTE: The values these variables can take (e.g. [0, 1]/QUBO or [-1, 1]/Ising) are defined for the factor graph, not for the specific potential
+```python
+potential = {'const': -2.0, 1: 1.0, (1, 2): -3.0, 'num vars': 2}
 ```
 
 
