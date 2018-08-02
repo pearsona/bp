@@ -1,6 +1,6 @@
 from numpy.random import random as rand
-from numpy import dot, zeros, diag, fill_diagonal, cos, sin
-from math import exp, pi
+from numpy import dot, zeros, diag, fill_diagonal, cos, sin, array, amax
+from math import exp, pi, floor
 from itertools import product
 
 from helper import *
@@ -19,38 +19,22 @@ from helper import *
 #=============================
 def brute_force(pot, states):
 
-	min_so_far = 100000000000000.0
+	min_so_far = 10e9
 
-	if 'mapping' not in pot.keys(): map_vars(pot)
-	mapping = pot['mapping']
-
+	J, const = dict_2_mat(pot)
+	h = diag(J).copy()
+	fill_diagonal(J, 0.0)
 
 	for state in product(states, repeat = pot['num vars']):
-		energy = 0.0
-		for variables in pot.keys():
-
-
-			if type(variables) == type(""):
-				if variables == 'const': energy += pot['const']
-				else: continue
-			else:
-
-				var_state = pot[variables]
-				if type(variables) == type(0): var_state *= state[mapping[variables]]
-
-				else:
-					for v in variables:
-						var_state *= state[mapping[v]]
-						if var_state == 0: break
-
-				energy += var_state
+		state = array(state)
+		energy = h.dot(state) + state.dot(J.dot(state.transpose())) + const
 
 		if energy < min_so_far:
 			min_so_far = energy
 			best_state = state
 
 
-	return min_so_far, state
+	return min_so_far, best_state
 
 
 # Description: Spin Vector Monte Carlo, effectively simulated annealing with a phase component (arXiv: 1401.7087)
@@ -62,10 +46,7 @@ def brute_force(pot, states):
 #			- B: problem hamiltonian schedule... list with an entry for each iteration/cycle
 # Outputs:	- the answer according to svmc
 #=====================
-def svmc(pot_, states = [-1, 1], temp = 10.0, num_cycles = 10, A = None, B = None):
-
-	if B is None: B = range(num_cycles)
-	if A is None: A = B[::-1]
+def svmc(pot_, states = [-1, 1], temp = 5.0, num_cycles = 20, A = None, B = None):
 
 	if states == [0, 1]:
 		qubo = True
@@ -78,7 +59,10 @@ def svmc(pot_, states = [-1, 1], temp = 10.0, num_cycles = 10, A = None, B = Non
 	J, const = dict_2_mat(pot)
 	h = diag(J).copy()
 	fill_diagonal(J, 0.0)
+	high = max(amax(abs(J)), amax(abs(h))) + abs(const)
 
+	if B is None: B = [1.0/high*(exp(x*1.0/num_cycles) - 1) for x in range(num_cycles)]
+	if A is None: A = B[::-1]
 
 	# Random initial state
 	num_spins = pot_['num vars']
@@ -92,22 +76,19 @@ def svmc(pot_, states = [-1, 1], temp = 10.0, num_cycles = 10, A = None, B = Non
 
 			# Compute the energy difference between the new state and the old state
 			trans_field = A[t]*sin(new_spins[i]) - sin(spins[i])
-			prob_ham = h[i] + J_[i]
-			prob_ham *= B[t]*cos(new_spins[i]) - cos(spins[i])
-			prob_ham += B[t]*const
+			prob_ham = B[t]*((h[i] + J_[i])*cos(new_spins[i]) - cos(spins[i]) + const)
 
 			# Do a metropolis update according to energy difference
-			if rand() < 1.0/max(1.0, exp((trans_field + prob_ham)/temp)): spins[i] = new_spins[i]
+			if rand() <= 1.0/max(1.0, exp((trans_field + prob_ham)/temp)): spins[i] = new_spins[i]
 
 	# Project onto computational basis
-	spins = [cos(spins[i]) for i in range(num_spins)]
+	if qubo: state = {-1: -1, 0: 1}
+	else: state = {-1: -1, 0: 1}
 
+	spins = [state[floor(cos(spins[i]))] for i in range(num_spins)]
+	energy = array(h).dot(spins) + array(spins).dot(J.dot(array(spins).transpose()))
 
-	if qubo:
-		return [(s + 1)/2 for s in spins]
-	else:
-		return spins
-
+	return energy, spins
 
 
 

@@ -9,6 +9,7 @@ from helper import *
 #				- solver: function that will be used to 'solve' (may be heuristic) a given potential dictionary
 #				- normalize: boolean determining if the messages and beliefs are to be normalized
 #				- states: list of possible states of the variables (e.g. [1, -1], [0, 1], [-1, 0, 1], etc.)
+#				- threshold: how much beliefs have to change in order to actually treat them as changed... float
 #
 # 	Factors: These are nodes labelled 'fx' where x is the factor number, with fields:
 #				- pot: a dictionary describing the potential function of the given factor (including how many variables involved)
@@ -32,13 +33,15 @@ class FactorGraph(nx.Graph):
 	#			- threshold: how much beliefs have to change in order to actually treat them as changed... float
 	# Outputs: none
 	#=============================
-	def __init__(self, solv = brute_force, states = [-1, 1], normalize = False, threshold = 0.01):
+	def __init__(self, solv = brute_force, states = [-1, 1], normalize = True, threshold = 0.01):
 		super().__init__()
 
 		self.num_factors = 0
 		self.num_variables = 0
+		self.ancillas = []
+
 		self.solver = solv
-		self.normalize = normalize
+		self.norm = normalize
 		self.states = states
 		self.threshold = threshold
 
@@ -54,11 +57,12 @@ class FactorGraph(nx.Graph):
 	# 			- potential = potential function for this factor... dictionary
 	#			- scope = variable nodes connected to this factor graph... list of ints
 	#			- messages = messages for each variable in scope... dictionary
+	#			- ancillas = which of these variables are ancillas... list
 	# Outputs:	none
 	#=============================
-	def add_factor(self, num, potential, scope = None, messages = {}):
+	def add_factor(self, num, potential, scope = None, messages = {}, ancillas = []):
 
-		if num < self.num_factors: return False
+		#if num < self.num_factors: return 'factor already in graph'
 
 		self.num_factors += 1
 		self.add_node('f' + str(num), pot = potential, mess = messages)
@@ -72,24 +76,44 @@ class FactorGraph(nx.Graph):
 					for x in k: scope += [x]
 
 		for k in scope:
-			if k not in self: self.add_variable(k)
+			if ('v' + str(k)) not in self: self.add_variable(k, ancilla = (k in ancillas))
 			self.add_edge('f' + str(num), 'v' + str(k))
 
 
 
 	# Description: Add a variable node to the graph
 	# Inputs:	- num = number to label node... int
-	#			- messages = messages for each factor... dictionary of tuples
+	#			- init_state = what to initialize messages according to (effectively a guess)... element of self.states
+	#			- ancilla = if this variable is ancillary (so won't be relevant to output/answer)
 	# Outputs:	none or false if the variable has already been added
 	#=============================
-	def add_variable(self, num, messages = {}):
+	def add_variable(self, num, init_state = None, ancilla = False):
 
-		if num < self.num_variables: return 'variable already in graph'
-		
+		#if num < self.num_variables: return 'variable already in graph'
+
+		#if init_state is None: init_state = self.states[0]
 		self.num_variables += 1
-		self.add_node('v' + str(num), mess = messages, bel = {})
+		self.add_node('v' + str(num), mess = {}, bel = {}, init = init_state)
+
+		if ancilla: self.ancillas += ['v' + str(num)]
 		
 
+
+	# Description: Add a set of variable nodes to the graph
+	# Inputs:	- num_vars = number of variables to add... int
+	#			- init_states = what to initialize messages according to (effectively a guess)... list of elements of self.states
+	#			- ancillas = which of these variables are ancillas... list of ints
+	# Outputs:	none or false if the variable has already been added
+	#=============================
+	def add_variables(self, num_vars, init_states = None, ancillas = []):
+
+		if init_states is None: init_states = [528]*num_vars
+		else:
+			if 0 in init_states and (self.states == [-1, 1] or self.states == [1, -1]): init_state = bin_2_spin(init_states)
+			if -1 in init_states and (self.states == [0, 1] or self.states == [1, 0]): init_state = spin_2_bin(init_states)
+
+		start = self.num_variables
+		for var in range(num_vars): self.add_variable(start + var, init_state = int(init_state[var]))
 
 
 
@@ -103,30 +127,42 @@ class FactorGraph(nx.Graph):
 
 
 	# Description: Initialize messages from each variable to the corresponding factors, default is equally 0.0
-	# Inputs:	- mess_state = which state to initialize messages to, from a var to a fac ... dictionary of dictionaries of dictionaries
+	# Inputs:	- mess_state = message for each state for each variable ... dictionary of dictionaries e.g. {0: {0: 1.0, 1: 0.0}}
 	# Outputs:	none
-	# NOTE: should just be from vars -> facs
+	# NOTE: the initial messages are just from vars -> facs
 	#=============================
 	def initialize(self, mess_state = {}):
 
 		for node in self:
 
-			node_num = int(node[1:])
-			if node in mess_state.keys(): self.nodes[node]['mess'] = mess_state[node]
-			else:
+			# just vars -> facs
+			if 'v' in node:
 
-				self.nodes[node]['mess'] = {}
-				for state in self.states: 
-					for neighbor in self[node]:
+				node_num = int(node[1:])
+				if node not in mess_state.keys():
 
-						neigh_num = int(neighbor[1:])
-						if neigh_num not in self.nodes[node]['mess']: 
-							self.nodes[node]['mess'][neigh_num] = {state: 0.0}
-						else: 
-							self.nodes[node]['mess'][neigh_num][state] = 0.0
+					init = {}
+					init_state = self.nodes[node]['init']
+					for state in self.states:
+
+						if state == init_state: init[state] = 0.0
+						else: init[state] = 10.0 #this value should definitely be tweaked...
+
+				else: init = mess_state[node]
 				
-			if 'v' in node: 
+				#self.nodes[node]['mess'] = {}... don't think this is necessary
+				for neighbor in self[node]:
+
+					neigh_num = int(neighbor[1:])
+					if neigh_num not in self.nodes[node]['mess']: 
+						self.nodes[node]['mess'][neigh_num] = {}
+					
+					self.nodes[node]['mess'][neigh_num] = init
+				
 				for state in self.states: self.nodes[node]['bel'][state] = 0.0
+
+
+
 
 
 	# Description: Calculate and send the message from the given factor to the given variable
@@ -138,7 +174,10 @@ class FactorGraph(nx.Graph):
 	def factor_to_variable(self, fac_num, var_num):
 
 		m = {}
-		m_old = self.nodes['f' + str(fac_num)]['mess'][var_num].copy()
+		if var_num in self.nodes['f' + str(fac_num)]['mess']:
+			m_old = self.nodes['f' + str(fac_num)]['mess'][var_num].copy()
+		else:
+			m_old = []
 
 		gen_pot = self.nodes['f' + str(fac_num)]['pot'].copy()
 		if 'const' not in gen_pot.keys(): gen_pot['const'] = 0.0
@@ -157,6 +196,7 @@ class FactorGraph(nx.Graph):
 				if neigh_num not in gen_pot.keys(): gen_pot[neigh_num] = 0.0
 
 				in_mess = self.nodes[neighbor]['mess'][fac_num]
+	
 				for state_i in self.states:
 					for state_j in self.states:
 						if state_i != state_j:
@@ -197,7 +237,7 @@ class FactorGraph(nx.Graph):
 		
 
 		self.nodes['f' + str(fac_num)]['mess'][var_num] = m
-		if self.normalize: m = normalize('f' + str(fac_num), False)
+		if self.norm: m = self.normalize('f' + str(fac_num), False)
 
 
 		return m != m_old
@@ -240,7 +280,7 @@ class FactorGraph(nx.Graph):
 
 		
 		self.nodes['v' + str(var_num)]['bel'] = b
-		if self.normalize: b = normalize('v' + str(var_num), True)
+		if self.norm: b = self.normalize('v' + str(var_num), True)
 
 		return changed
 
@@ -280,7 +320,7 @@ class FactorGraph(nx.Graph):
 		
 		m_old = self.nodes['v' + str(var_num)]['mess'][fac_num].copy()
 		self.nodes['v' + str(var_num)]['mess'][fac_num] = m
-		if self.normalize: m = normalize('v' + str(var_num), False)
+		if self.norm: m = self.normalize('v' + str(var_num), False)
 
 		return m != m_old
 
@@ -303,6 +343,30 @@ class FactorGraph(nx.Graph):
 
 
 
+
+	# Description: Normalize all messages and beliefs in the factor graph s.t the lowest value for each one is 0.0
+	# Inputs:	- node: which node to normalize... string
+	#			- bel: whether to normalize the belief (or the messages)... bool
+	# Outputs:	- none
+	#=============================
+	def normalize(self, node, bel):
+
+		if bel:
+			low = min(self.nodes[node]['bel'].values())
+			for state in self.states: self.nodes[node]['bel'][state] -= low
+
+			return self.nodes[node]['bel']
+
+		else:
+			ms = self.nodes[node]['mess']
+			for m in ms:
+				low = min(ms[m].values())
+				for state in self.states: self.nodes[node]['mess'][m][state] -= low
+
+			return self.nodes[node]['mess']
+
+
+
 	# Description: Find the best state based on the beliefs
 	# Inputs: none
 	# Outputs: - the best state... list
@@ -310,77 +374,24 @@ class FactorGraph(nx.Graph):
 	#=============================
 	def get_best_state(self):
 
-		state = [0]*self.num_variables
+		state = [5.28]*self.num_variables
 
 		for var_num in range(self.num_variables):
-			min_so_far = 100000
-			for s in self.states:
 
-				b = self.nodes['v' + str(var_num)]['bel'][s]
-				if b < min_so_far:
-					min_so_far = b
-					state[var_num] = s
+			var = 'v' + str(var_num)
+			if var not in self.ancillas:
 
-		return state
-
-
-
-
-	# Description: Normalize the given message such that the minimum value is 0
-	# Inputs:	- node: which node to normalize
-	#			- bel: if it's a set of beliefs being normalized... bool
-	#			- fast_LB: to compute a fast lower bound or brute force it... bool
-	# Outputs:	- normalized messages... dictionary
-	# NOTE: Can this be approximated for better efficiency?
-	# NOTE: Currently built for just ising or qubo
-	#=============================
-	def normalize(self, node, bel, fast_LB = False):
-
-		# Belief... meaning we normalize the sum of the beliefs to 1
-		if bel:
-			total = 0.0
-			bels = self.nodes[node]['bel']
-
-			for b in bels.values(): total += b
-			if total == 0.0: return bels
-
-			for k in bels.keys(): bels[k] /= total
-
-			return bels
-		
-		# Factor Node... meaning we normalize by subtracting the minimum energy possible, so
-		# as to have a minimum message of 0.0
-		if 'f' in node:
-			if 'min' in self.nodes[node].keys(): norm = self.nodes[node]['min']
-			else:
-
-				pot = self.nodes[node]['pot']
-
-				# In qubo case: pick out only negative terms and put others in 0 state
-				# In ising case: take negative of each term
-				if fast_LB:
-
-					qubo = 0 in self.states
-
-					if 'const' in pot.keys(): norm = pot['const']
-					else: norm = 0.0
-
-					for energy in pot.values():
-						if qubo and energy < 0: norm += energy
-						else: norm -= abs(energy)
-
-				else: 
-					norm, _ = brute_force(pot, self.states)
-					self.nodes[node]['min'] = norm
-					
-			mess = self.nodes['f' + str(fac_num)]['mess']
-			for var in mess:
-				for state in self.states: mess[var][state] -= norm
-
-		# Variable Node... meaning we normalize...?
+				low = 10e9
+				for s in self.states:
+					b = self.nodes[var]['bel'][s]
+					if b < low:
+						low = b
+						state[var_num] = s
 
 
-		return
+		return [s for s in state if s != 5.28]
+
+
 
 
 
@@ -399,7 +410,7 @@ class FactorGraph(nx.Graph):
 	# Inputs: - none (since this function will act on the instance calling it)
 	# Outputs: - none (since it will internally change it)
 	#=====================
-	def graph_qubo_2_ising(self):
+	def qubo_2_ising(self):
 
 		if self.states == [-1, 1]: return 'this graph is already in ising form'
 
@@ -408,7 +419,7 @@ class FactorGraph(nx.Graph):
 			if 'f' in node: 
 				self.nodes[node]['pot'] = qubo_2_ising(self.nodes[node]['pot'])
 			else:
-				if self.nodes[node]['bel'] != {}:
+				if self.nodes[node]['bel'] != {} and 0 in self.nodes[node]['bel'].keys():
 					tmp = self.nodes[node]['bel'][0]
 					del self.nodes[node]['bel'][0]
 					self.nodes[node]['bel'][-1] = tmp
@@ -417,7 +428,7 @@ class FactorGraph(nx.Graph):
 			for neighbor in self[node]:
 				neigh_num = int(neighbor[1:])
 
-				if self.nodes[node]['mess'] != {}:
+				if self.nodes[node]['mess'] != {} and 0 in self.nodes[node]['mess'][neigh_num].keys():
 					tmp = self.nodes[node]['mess'][neigh_num][0]
 					del self.nodes[node]['mess'][neigh_num][0]
 					self.nodes[node]['mess'][neigh_num][-1] = tmp
@@ -430,7 +441,7 @@ class FactorGraph(nx.Graph):
 	# Inputs: - none (since this function will act on the instance calling it)
 	# Outputs: - none (since it will internally change it)
 	#=====================
-	def graph_ising_2_qubo(self):
+	def ising_2_qubo(self):
 
 		if self.states == [0, 1]: return 'this graph is already in qubo form'
 

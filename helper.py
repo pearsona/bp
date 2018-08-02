@@ -114,6 +114,37 @@ def ising_2_qubo(ising):
 
 
 
+# Description: Take a binary vector and turn it into a spin vector
+# Inputs:	- vec: vector to be converted
+# Outputs:	- spin version of vec
+#====================
+def bin_2_spin(vec):
+
+	if type(vec) == type([]): 
+		spin = vec[:]
+		for i in range(len(vec)): spin[i] = 2*vec[i] - 1
+
+	else: spin = 2*vec - 1
+
+	return spin
+
+
+# Description: Take a spin vector and turn it into a binary vector
+# Inputs:	- vec: vector to be converted
+# Outputs:	- binary version of vec
+#====================
+def spin_2_bin(vec):
+
+	if type(vec) == type([]): 
+		bin = vec[:]
+		for i in range(len(vec)): bin[i] = (vec[i] + 1)/2
+
+	else: bin = (vec + 1)/2
+
+	return bin
+
+
+
 # Description: Take a truth table potential and turn it into a potential dictionary as used in this file
 # Inputs:	- table: a description of the truth table potential... dictionary (key = state of variables, value = potential)
 # Outputs:	- the qubo potential in terms of the variables... dictionary
