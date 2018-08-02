@@ -1,6 +1,6 @@
 # Belief Propogation and LDPC Decoding
 
-## ldpc.py
+## [ldpc.py](ldpc.py)
 This is the code to run BP on LDPC instances, which includes loading instances (from .mat files) of arbitrary density (the quality of the mapping for more than 3 bit parity checks is not guaranteed) and creating a factor graph with a factor for each parity check.
 
 Usage example:
@@ -20,7 +20,7 @@ graph.solver = svmc
 
 
 
-## bp.py
+## [bp.py](bp.py)
 This is the main code to use for running loopy min-sum belief propogation.
 
 Usage examples:
@@ -51,7 +51,7 @@ min_sum_BP(g = my_factor_graph, solver = solv, init_mess = mess, max_iter = num_
 ```
 
 
-## FactorGraph.py
+## [FactorGraph.py](FactorGraph.py)
 This is the class (a child of [networkx](https://networkx.github.io/)) that defines the factor graph (more details at top of file) with the ability to run min-sum BP and to switch betweeen a QUBO and Ising representation, though technically the code is written to work with any definition of a potential and any possible variable states.
 
 Usage example:
@@ -73,10 +73,10 @@ potential = {'const': -2.0, 1: 1.0, (1, 2): -3.0, 'num vars': 2}
 ```
 
 
-## solvers.py
+## [solvers.py](solvers.py)
 This is a collection of various solvers that all require the potential and the possible variable states, but may have other parameters. Currently, there is a brute force solver and svmc written, with plans to possibly develop sa, sqa, and dwave.
 
-## helper.py
+## [helper.py](solvers.py)
 This is a collection of various functions that are used throughout the above code. This includes functions to:
 * convert between qubo and ising potentials 
 * convert between a matrix and dictionary representation of potentials
