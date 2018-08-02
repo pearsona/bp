@@ -1,4 +1,24 @@
-# bp: Belief Propogation
+# Belief Propogation and LDPC Decoding
+
+## ldpc.py
+This is the code to run BP on LDPC instances, which includes loading instances (from .mat files) of arbitrary density (the quality of the mapping for more than 3 bit parity checks is not guaranteed) and creating a factor graph with a factor for each parity check.
+
+Usage example:
+
+1) To run bp on all instances stored in a directory labelled 'instances':
+```python
+from ldpc import *
+runBP(folder = 'instances')
+```
+
+2) To create a factor graph from a parity check matrix H and syndrome s, then change the solver to svmc:
+```python
+from ldpc import *
+graph = create_factor_graph(H, s)
+graph.solver = svmc
+```
+
+
 
 ## bp.py
 This is the main code to use for running loopy min-sum belief propogation.
