@@ -20,7 +20,7 @@ from os.path import isfile, join
 #			- verbose: whether to print what's happening or not... bool
 # Outputs:	- the solutions found for each instance
 #===================================================
-def runBP(folder = 'insts', solver = svmc, verbose = True):
+def runBP(folder = 'insts', solver = sa, verbose = True, regionalize = True, pool_size = 1):
 
 	sols = []
 	dist = []
@@ -30,13 +30,15 @@ def runBP(folder = 'insts', solver = svmc, verbose = True):
 	for inst in insts:
 		if verbose: print('Running: ' + inst['name'])
 
-		graph = create_factor_graph(inst['H'], array(inst['H'].dot(inst['y1'].transpose()) % 2, dtype = int))
+		graph = create_factor_graph(inst['H'], array(inst['y1'].transpose(), dtype = int))#array(inst['H'].dot(inst['y1'].transpose()) % 2, dtype = int))
 		graph.solver = solver
 
+		if regionalize: graph = graph.regionalize(recurs = False, frac_regions = 0.2)
+
 		if verbose: print('Created the Factor Graph with (# variables, # factors): ' + str((graph.num_variables, graph.num_factors)))
-		sol, _ = min_sum_BP(graph, solver, verbose = verbose)
+		sol, _ = min_sum_BP(graph, solver, verbose = verbose, pool_size = pool_size)
 		sols += [sol]
-		dist += [norm(sol - inst['y'])]
+		dist += [norm(array(sol) - inst['y'])]
 
 	return sols, dist
 
@@ -65,7 +67,7 @@ def create_factor_graph(H, s = None, ising = True):
 			if check[bit] == 1: bits += [bit]
 
 		potential, ancs = parity_check_ham(bits, g.num_variables)
-		g.add_factor(g.num_factors, potential, ancillas = ancs)
+		g.add_factor(potential, ancillas = ancs)
 
 	if not ising: g.ising_2_qubo()
 
