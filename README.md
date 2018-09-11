@@ -1,4 +1,4 @@
-# Belief Propogation and LDPC Decoding
+# Belief Propagation and LDPC Decoding
 
 ## [ldpc.py](ldpc.py)
 This is the code to run BP on LDPC instances, which includes loading instances (from .mat files) of arbitrary density (the quality of the mapping for more than 3 bit parity checks is not guaranteed) and creating a factor graph with a factor for each parity check.
@@ -21,7 +21,7 @@ graph.solver = svmc
 
 
 ## [bp.py](bp.py)
-This is the main code to use for running loopy min-sum belief propogation.
+This is the main code to use for running loopy min-sum belief propagation.
 
 Usage examples:
 
