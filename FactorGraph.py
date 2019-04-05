@@ -9,6 +9,32 @@ from multiprocessing.pool import Pool
 import copy_reg
 import types
 
+import heapq
+
+from dwave_sapi2.fix_variables import fix_variables
+
+import os
+import psutil
+import signal
+
+parent_id = os.getpid()
+
+def worker_init():
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+# def worker_init():
+#     def sig_int(signal_num, frame):
+#         print('signal: %s' % signal_num)
+#         parent = psutil.Process(parent_id)
+#         for child in parent.children():
+#             if child.pid != os.getpid():
+#                 print("killing child: %s" % child.pid)
+#                 child.kill()
+#         print("killing parent: %s" % parent_id)
+#         parent.kill()
+#         print("killed: %s" % os.getpid())
+#         psutil.Process(os.getpid()).kill()
+#     signal.signal(signal.SIGINT, sig_int)
 
 
 def _pickle_method(method):
@@ -63,7 +89,7 @@ class FactorGraph(nx.Graph):
 	#			- threshold: how much beliefs have to change in order to actually treat them as changed... float
 	# Outputs: none
 	#=============================
-	def __init__(self, solver = brute_force, states = [-1, 1], normalize = True, threshold = 0.1):
+	def __init__(self, solver = brute_force, states = [-1, 1], normalize = True, threshold = 0.5):
 		super(FactorGraph, self).__init__()
 
 		self.num_factors = 0
@@ -74,6 +100,7 @@ class FactorGraph(nx.Graph):
 		self.norm = normalize
 		self.states = states
 		self.threshold = threshold
+
 
 
 	#=====================
@@ -104,15 +131,15 @@ class FactorGraph(nx.Graph):
 				if type(k) == type(0):
 					if k not in scope: scope += [k]
 				elif k not in ['const', 'num vars']:
-					for x in k: 
+					for x in k:
 						if x not in scope: scope += [x]
 
 		for k in scope:
 			if ('v' + str(k)) not in self: self.add_variable(num = k, ancilla = (k in ancillas))
 			self.add_edge('f' + str(num), 'v' + str(k))
 
-		if 'num vars' not in self.nodes['f' + str(num)]: self.nodes['f' + str(num)]['pot']['num vars'] = len(scope)
-		if 'const' not in self.nodes['f' + str(num)]: self.nodes['f' + str(num)]['pot']['const'] = 0.0
+		if 'num vars' not in self.nodes['f' + str(num)]['pot']: self.nodes['f' + str(num)]['pot']['num vars'] = len(scope)
+		if 'const' not in self.nodes['f' + str(num)]['pot']: self.nodes['f' + str(num)]['pot']['const'] = 0.0
 
 
 
@@ -129,7 +156,7 @@ class FactorGraph(nx.Graph):
 		#if init_state is None: init_state = self.states[0]
 		if num == -1: num = self.num_variables
 		self.num_variables += 1
-		self.add_node('v' + str(num), mess = {}, bel = {}, init = init_state)
+		self.add_node('v' + str(num), mess = {}, bel = {}, init = init_state, done = False)
 
 		if ancilla: self.ancillas += ['v' + str(num)]
 		
@@ -149,7 +176,7 @@ class FactorGraph(nx.Graph):
 			if -1 in init_states and (self.states == [0, 1] or self.states == [1, 0]): init_state = spin_2_bin(init_states)
 
 		start = self.num_variables
-		for var in range(num_vars): self.add_variable(init_state = int(init_state[var]))
+		for var in range(num_vars): self.add_variable(init_state = int(init_states[var]))
 
 
 
@@ -181,8 +208,8 @@ class FactorGraph(nx.Graph):
 					init_state = self.nodes[node]['init']
 					for state in self.states:
 
-						if state == init_state: init[state] = 0.0
-						else: init[state] = 5.0/len(self[node]) #the overall strength split amongst the factors
+						if state == init_state or init_state == 528 or init_state is None: init[state] = 0.0
+						else: init[state] = 500
 
 				else: init = mess_state[node]
 				
@@ -220,7 +247,7 @@ class FactorGraph(nx.Graph):
 
 		gen_pot = self.nodes['f' + str(fac_num)]['pot'].copy()
 		if 'const' not in gen_pot.keys(): gen_pot['const'] = 0.0
-		
+		gen_pot['num vars'] -= 1
 
 		# Incoming message contribution...
 		# For each other incoming message, add a term for each state that only
@@ -230,12 +257,13 @@ class FactorGraph(nx.Graph):
 		#		sum(in_mess[statei]*prod((x - state_j)/(statei - state_j), j != i))...
 		#		currently the 0th and 1st order terms are explicitly written out, but this could be wrapped up into a loop...
 		for neighbor in self['f' + str(fac_num)]:
-			if 'v' in neighbor and neighbor[1:] != var_num:
-				neigh_num = int(neighbor[1:])
+			
+			neigh_num = int(neighbor[1:])
+			if 'v' in neighbor and neigh_num != var_num:
 				if neigh_num not in gen_pot.keys(): gen_pot[neigh_num] = 0.0
 
 				in_mess = self.nodes[neighbor]['mess'][fac_num]
-	
+
 				for state_i in self.states:
 					for state_j in self.states:
 						if state_i != state_j:
@@ -245,6 +273,7 @@ class FactorGraph(nx.Graph):
 
 		# Factor contribution...
 		# Determine the contribution from freezing this variable to each of its possible states
+		# This part should be the same each time... maybe just calculate this once and store
 		for state in self.states:
 			pot = gen_pot.copy()
 
@@ -272,57 +301,61 @@ class FactorGraph(nx.Graph):
 						del pot[k]
 
 			# Now use this instance's solver to attempt to find a solution
-			m[state], _ = self.solver(pot, self.states)
+			m[state], _ = self.solver(pot, self.states)#), show_spec = True)
 		
 
 		#self.nodes['f' + str(fac_num)]['mess'][var_num] = m
 		if self.norm: m = self.normalize(m) #self.normalize('f' + str(fac_num), var_num, False)
 
+		#print('f' + str(fac_num) + ' -> v' + str(var_num))
+		#print(m_old)
+		#print(m)
 
 		return m, m != m_old
 
 	
-	# Description: Send message from all factors to all of the variables in their scopes
+	# Description: Send message from all factors to all of the variables on their borders (not internal ones)
 	# Inputs:	none
 	# Outputs:	- whether any messages changed
 	#=============================
 	def all_factors_to_variables(self, verbose = False, pool_size = 1):
 
 
-		if pool_size > 1: pool = Pool(pool_size)
-		
-		res = {}
-		changed = False
+		if pool_size > 1: 
+			pool = Pool(pool_size, worker_init)
+			res = {}
+
+		num = 0
 		for fac_num in range(self.num_factors):
 			for neighbor in self['f' + str(fac_num)]:
-				if 'v' in neighbor:
-
+				# making sure to only do border variables ... should this include ancillary variables?
+				if 'v' in neighbor and len(self[neighbor]) > 1:
 					var_num = int(neighbor[1:])
-					if pool_size > 1:
-						#res[fac_num, var_num] = pool.apply_async(self.factor_to_variable, (fac_num, var_num))
-						self.nodes['f' + str(fac_num)]['mess'][var_num], ch = pool.apply_async(self.factor_to_variable, (fac_num, var_num)).get()
-					else: 
-						self.nodes['f' + str(fac_num)]['mess'][var_num], ch = self.factor_to_variable(fac_num, var_num)
-					
-					changed = changed or ch
+					if not self.nodes['v' + str(var_num)]['done']:
 
-					if verbose: print('f' + str(fac_num) + ' -> ' + neighbor + ': ' + str(self.nodes['f' + str(fac_num)]['mess'][var_num]))
+						if pool_size > 1:
+							res[fac_num, var_num] = pool.apply_async(self.factor_to_variable, (fac_num, var_num))
+							#self.nodes['f' + str(fac_num)]['mess'][var_num], ch = pool.apply_async(self.factor_to_variable, (fac_num, var_num)).get()
+						else: 
+							self.nodes['f' + str(fac_num)]['mess'][var_num], ch = self.factor_to_variable(fac_num, var_num)
+							#num += ch
+
+							if verbose: print('f' + str(fac_num) + ' -> ' + neighbor + ': ' + str(self.nodes['f' + str(fac_num)]['mess'][var_num]))
 
 		if pool_size > 1:
+			for fac_num, var_num in res.keys():
+					self.nodes['f' + str(fac_num)]['mess'][var_num], ch = res[fac_num, var_num].get(18000)
+					#num += ch
+
+					if verbose: print('f' + str(fac_num) + ' -> ' + str(var_num) + ': ' + str(self.nodes['f' + str(fac_num)]['mess'][var_num]))
+
 			pool.close()
 			pool.join()
 
-			# for fac_num, var_num in res.keys():
-			# 	self.nodes['f' + str(fac_num)]['mess'][var_num], ch = res[fac_num, var_num].get()
-			# 	changed = changed or ch
-
-			# 	if verbose: print('f' + str(fac_num) + ' -> ' + neighbor + ': ' + str(self.nodes['f' + str(fac_num)]['mess'][var_num]))
+		return num
 
 
-		return changed
-
-
-	# Description: Calculate and send the message from the given factor to the given variable
+	# Description: Update this variable's belief
 	# Inputs:	- var_num = which variable is receiving the message... int
 	# Outputs:	- the new belief
 	#			- changed: if any beliefs changed... bool
@@ -342,7 +375,12 @@ class FactorGraph(nx.Graph):
 
 		
 		#self.nodes['v' + str(var_num)]['bel'] = b
+		low = 0
 		if self.norm: b = self.normalize(b) #self.normalize('v' + str(var_num), bel = True)
+		else: low = minimum(b.values())
+
+		#second_low = heapq.nsmallest(2, b.values())[-1]
+		#if second_low - low > 1e9: self.nodes['v' + str(var_num)]['done'] = True
 
 		return b, changed
 
@@ -350,29 +388,38 @@ class FactorGraph(nx.Graph):
 
 	# Description: Update the beliefs for all variables
 	# Inputs:	none
-	# Outputs:	- changed: if any beliefs changed... bool
+	# Outputs:	- num: how many beliefs changed... int
 	#=============================
 	def update_all_beliefs(self, verbose = False, pool_size = 1):
 
-		if pool_size > 1: pool = Pool(pool_size)
+		if pool_size > 1: pool = Pool(pool_size, worker_init)
 
-		changed = False
+		num = 0
+		res = {}
 		for var_num in range(self.num_variables):
-			if pool_size > 1: 
-				self.nodes['v' + str(var_num)]['bel'], ch = pool.apply_async(self.update_belief, (var_num,)).get()
-			else: 
-				self.nodes['v' + str(var_num)]['bel'], ch = self.update_belief(var_num)
+			if not self.nodes['v' + str(var_num)]['done']:
+				if pool_size > 1: 
+					res[var_num] = pool.apply_async(self.update_belief, (var_num,))
+				else: 
+					self.nodes['v' + str(var_num)]['bel'], ch = self.update_belief(var_num)
 
-			changed = changed or ch
-			if verbose: print('v' + str(var_num) + ': ' + str(self.nodes['v' + str(var_num)]['bel']))
+					num += ch
+					if ch == False: self.nodes['v' + str(var_num)]['done'] = True
+				#if verbose: print('v' + str(var_num) + ': ' + str(self.nodes['v' + str(var_num)]['bel']))
+			#elif verbose: print('v' + str(var_num) + ' is frozen at: ' + str(self.nodes['v' + str(var_num)]['bel']))
 
 
 		if pool_size > 1:
+
+			for var_num in range(self.num_variables): 
+				self.nodes['v' + str(var_num)]['bel'], ch = res[var_num].get(18000)
+				num += ch
+
 			pool.close()
 			pool.join()
 
 
-		return changed
+		return num
 
 
 
@@ -380,6 +427,7 @@ class FactorGraph(nx.Graph):
 	# Inputs:	- var_num = which variable is sending the message... int
 	#			- fac_num = which factor is receiving the message... int
 	# Outputs:	- the message
+	# NOTE: Currently this will send a 0 message from any non-border variable... could probably get a small speedup by checking if there are more than 1 factor neighbors and only calculating a message then
 	#=============================
 	def variable_to_factor(self, var_num, fac_num):
 
@@ -391,7 +439,16 @@ class FactorGraph(nx.Graph):
 				if 'f' in neighbor and neighbor != ('f' + str(fac_num)):
 					m[state] += self.nodes[neighbor]['mess'][var_num][state]
 
+			# since a v->f message is the sum over f->v messages, we want to divide out the number of factors. To see why, consider the following example:
+			# Suppose each factor sends a message of 100 towards one state, so m[state] = 100*num_factors
+			# Then, this will get built into each factor's potential, meaning they will each send this sized message back in the next iteration
+			# Then the next v->f message will be order (100*num_factors)*num_factors
+			# So, after n iterations, m[state] = 100*num_factors^n
+			# Thus, if we divide out num_factors each iteration, we keep the messages bounded
+			m[state] /= len(self['v' + str(var_num)])
+
 		#self.nodes['v' + str(var_num)]['mess'][fac_num] = m
+
 		if self.norm: m = self.normalize(m)#self.normalize('v' + str(var_num), fac_num, False)
 
 		return m, m != self.nodes['v' + str(var_num)]['mess'][fac_num]
@@ -403,36 +460,42 @@ class FactorGraph(nx.Graph):
 	#=============================
 	def all_variables_to_factors(self, verbose = False, pool_size = 1):
 
-		if pool_size > 1: pool = Pool(pool_size)
+		if pool_size > 1: pool = Pool(pool_size, worker_init)
 
-		changed = False
-		for var_num in range(self.num_variables):
-			for neighbor in self['v' + str(var_num)]:
-				if 'f' in neighbor:
+		num = 0
+		res = {}
+		for var_num in range(self.num_variables)[::-1]:  #why backwards...?
+			if not self.nodes['v' + str(var_num)]['done']:
 
-					fac_num = int(neighbor[1:])
+				for neighbor in self['v' + str(var_num)]:
+					if 'f' in neighbor:
 
-					if pool_size > 1: 
-						self.nodes['v' + str(var_num)]['mess'][fac_num], ch = pool.apply_async(self.variable_to_factor, (var_num, fac_num)).get()
-					else: 
-						self.nodes['v' + str(var_num)]['mess'][fac_num], ch = self.variable_to_factor(var_num, fac_num)
-					
-					changed = changed or ch
-					if verbose: print('v' + str(var_num) + ' -> ' + neighbor + ': ' + str(self.nodes['v' + str(var_num)]['mess'][fac_num]))
+						fac_num = int(neighbor[1:])
+
+						if pool_size > 1: 
+							res[var_num, fac_num] = pool.apply_async(self.variable_to_factor, (var_num, fac_num))
+						else: 
+							self.nodes['v' + str(var_num)]['mess'][fac_num], ch = self.variable_to_factor(var_num, fac_num)
+							#num += ch
+						#if verbose: print('v' + str(var_num) + ' -> ' + neighbor + ': ' + str(self.nodes['v' + str(var_num)]['mess'][fac_num]))
 
 
 		if pool_size > 1:
+
+			for var_num, fac_num in res: 
+				self.nodes['v' + str(var_num)]['mess'][fac_num], ch = res[var_num, fac_num].get(18000)
+				#num += ch
+
 			pool.close()
 			pool.join()
 
 
-		return changed
+		return num
 
 
 
 	# Description: Normalize all messages and beliefs in the factor graph s.t the lowest value for each one is 0.0
 	# Inputs:	- node: which node to normalize... string
-	#			- bel: whether to normalize the belief (or the messages)... bool
 	# Outputs:	- none
 	#=============================
 	def normalize(self, mes):
@@ -442,18 +505,119 @@ class FactorGraph(nx.Graph):
 
 		return mes
 
-		# if bel:
-		# 	low = min(self.nodes[node_from]['bel'].values())
-		# 	for state in self.states: self.nodes[node_from]['bel'][state] -= low
 
-		# 	return self.nodes[node_from]['bel']
 
-		# else:
-		# 	ms = self.nodes[node_from]['mess'][node_to]
-		# 	low = min(ms.values())
-		# 	for state in self.states: self.nodes[node_from]['mess'][node_to][state] -= low
 
-		# 	return self.nodes[node_from]['mess'][node_to]
+
+
+	# Description: Using the results of BP and solving each factor for its internal variables, get the final solution
+	# Inputs:	- pool_size: how many threads to allow running on this
+	# Outputs: - the solutions... list
+	#=============================
+	def finish(self, pool_size = 1):
+
+		if pool_size > 1: pool = Pool(pool_size, worker_init)
+		
+		for fac_num in range(self.num_factors):
+			if pool_size > 1: 
+				pool.apply_async(self.factor_internal_solve, (fac_num, ))
+			else: 
+				self.factor_internal_solve(fac_num)	
+
+
+		if pool_size > 1:
+			pool.close()
+			pool.join()
+
+
+		return self.get_best_state()
+
+
+
+	# Description: Solve this factor for the internal variables by fixing the border variables
+	# Inputs:	fac_num: which factor to solve
+	# Outputs:	none (beliefs of internal variables will be updated)
+	#=============================
+	def factor_internal_solve(self, fac_num):
+
+		neighbors = self['f' + str(fac_num)]
+		pot = self.nodes['f' + str(fac_num)]['pot'].copy()
+
+		# Incoming message contribution...
+		# For each other incoming message, add a term for each state that only
+		# contributes if the variable is in that state
+		# NOTE: for now this assumes only 2 possible states...
+		# 		to generalize to n states, must implement a higher order potential of the form:
+		#		sum(in_mess[statei]*prod((x - state_j)/(statei - state_j), j != i))...
+		#		currently the 0th and 1st order terms are explicitly written out, but this could be wrapped up into a loop...
+		for neighbor in self['f' + str(fac_num)]:
+			
+			neigh_num = int(neighbor[1:])
+			if 'v' in neighbor:
+				if neigh_num not in pot.keys(): pot[neigh_num] = 0.0
+
+				in_mess = self.nodes[neighbor]['mess'][fac_num]
+
+				for state_i in self.states:
+					for state_j in self.states:
+						if state_i != state_j:
+							pot['const'] -= in_mess[state_i]*state_j/(state_i - state_j)
+							pot[neigh_num] += in_mess[state_i]/(state_i - state_j)
+		
+
+		# Freezing each border variable
+		for neighbor in neighbors:
+			var_num = int(neighbor[1:])
+
+			if 'v' in neighbor and len(self[neighbor]) > 1 and var_num not in self.ancillas:
+				pot['num vars'] -= 1
+
+				# Determine which state to freeze this variable to
+				state = 5.28
+				low = 10e9
+				for s in self.states:
+					b = self.nodes[neighbor]['bel'][s]
+					if b < low:
+						low = b
+						state = s
+
+				# Freeze each variable in the potential
+				if var_num in pot.keys():
+					pot['const'] += pot[var_num]*state
+					del pot[var_num]
+
+				for k in pot.keys():
+					if type(k) == type((0, 0)):
+						if var_num in k:
+
+							(a, b) = k
+							if var_num == a: 
+								if b in pot.keys():
+									pot[b] += pot[k]*state
+								else:
+									pot[b] = pot[k]*state
+
+							if var_num == b: 
+								if a in pot.keys():
+									pot[a] += pot[k]*state
+								else:
+									pot[a] = pot[k]*state
+
+							del pot[k]
+
+		map_vars(pot)
+
+		# Now use this instance's solver to find a solution
+		_, solution = self.solver(pot, self.states)#), show_spec = True)
+
+		# Use this solution to threshold (i.e. set really extreme/certain) the beliefs for the internal decision variables
+		for neighbor in neighbors:
+			var_num = int(neighbor[1:])
+
+			if 'v' in neighbor and len(self[neighbor]) == 1 and var_num not in self.ancillas:
+				for state in self.states:
+					if solution[pot['mapping'][var_num]] == state: self.nodes[neighbor]['bel'][state] = 0
+					else: self.nodes[neighbor]['bel'][state] = 1e9
 
 
 
@@ -484,10 +648,7 @@ class FactorGraph(nx.Graph):
 
 
 
-
-
-
-
+	
 
 
 
@@ -571,9 +732,9 @@ class FactorGraph(nx.Graph):
 	# Inputs:	- frac_regions: fraction of regions to aim for (e.g. 4 factors and frac_regions = 0.5 => 2 regions)... float between 0 and 1
 	# Outputs:	- graph 
 	#===================
-	def regionalize(self, frac_regions = 0.5, recurs = True):
+	def regionalize(self, num_regions = 35, recurs = True):
 
-		_, parts = part_graph(self.shared_variable_graph(), max(int(self.num_factors*frac_regions), 2), recursive = recurs)
+		_, parts = part_graph(self.shared_variable_graph(), max(num_regions, 2), recursive = recurs)
 		parts = [abs(max(parts) - p) for p in parts]
 		new_potentials = {f: {} for f in range(max(parts) + 1)}
 

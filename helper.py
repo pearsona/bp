@@ -1,4 +1,4 @@
-from numpy import zeros
+from numpy import zeros, nonzero, shape
 
 # Description: Take a qubo description and turn it into the equivalent ising description
 # Inputs: - qubo: the qubo potential to be transformed... dictionary (key = variable(s), value = potential)
@@ -156,15 +156,17 @@ def truth_table_2_qubo(table): pass
 
 # Description: Turn a potential dictionary into a matrix equivalent
 # Inputs:	- pot: a dictionary to be converted... dictionary
+#			- num_vars: how many variables, in case this isn't provided by the potential... int
 # Outputs:	- mat: matrix containing the potential... np matrix
 #			- const: the constant of the potential... float
 #=====================
-def dict_2_mat(pot):
+def dict_2_mat(pot, num_vars = -1):
 
 	if 'mapping' not in pot.keys(): map_vars(pot)
 	mapping = pot['mapping']
 
-	mat = zeros((pot['num vars'], pot['num vars']))
+	if num_vars == -1: num_vars = pot['num vars']
+	mat = zeros((num_vars, num_vars))
 	const = 0.0
 
 	for variables in pot:
@@ -212,24 +214,79 @@ def mat_2_dict(mat, const = 0.0):
 def map_vars(pot):
 
 	mapping = {}
+	free_var_start = -1
 
 	for variables in pot:
 
-		if type(variables) == type(""): continue
+		#if type(variables) == type(""): continue
 
-		if type(variables) == type(0): 
-			if variables not in mapping: mapping[variables] = len(mapping)
+		#if type(variables) == type(0): 
+		#	if variables not in mapping: h_vars += [variables]#mapping[variables] = len(mapping)
 
-		else:
-
+		#else:
+		if type(variables) == type((0,0)):
 			for v in variables: 
 				if v not in mapping: mapping[v] = len(mapping)
 
 
+	for v in pot:
+		if type(v) == type(0) and v not in mapping:
+			if free_var_start == -1: free_var_start = len(mapping)
+			mapping[v] = len(mapping)
+
 	pot['mapping'] = mapping
+	if free_var_start == -1: pot['free var start'] = len(mapping)
+	else: pot['free var start'] = free_var_start
 
 
+def get_num_vars(pot):
 
+	xs = []
+	for k in pot:
+		if type(k) == type(0):
+			if k not in xs: xs += [k]
+		elif type(k) == type((0, 0)):
+			(a, b) = k
+			if a not in xs: xs += [a]
+			if b not in xs: xs += [b]
+
+	pot['num vars'] = len(xs)
+
+	return len(xs)
+
+
+def dwave_prepare(pot):
+
+	if 'mapping' not in pot: map_vars(pot)
+	mapping = pot['mapping']
+
+	max_var = max(pot['mapping'].values()) + 1
+	const = 0
+	h = zeros(max_var)
+	J = {}
+	adj = [(v, v) for v in range(pot['free var start'], max_var)] # make sure free variables are included
+	
+	if 'const' in pot: const = pot['const']
+	for k in pot:
+
+		if type(k) == type(""): continue
+		if type(k) == type(0): 
+			h[mapping[k]] = pot[k]
+		else:
+			(a, b) = k
+			a = mapping[a]
+			b = mapping[b]
+
+			if a <= b:
+				J[a, b] = pot[k]
+				adj += [(a, b)]
+			else:
+				J[b, a] = pot[k]
+				adj += [(b, a)]
+
+	#free_state = {v: int((pot[v] < 0) - (pot[v] > 0)) for v in pot['free vars']}
+
+	return const, h, J, adj#, free_state
 
 
 

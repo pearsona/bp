@@ -7,6 +7,12 @@ from numpy.linalg import norm
 from scipy.io import loadmat
 from os import listdir
 from os.path import isfile, join
+from fnmatch import fnmatch
+
+import re
+from pickle import dump, load
+
+
 
 # LDPC as Factor Graphs
 # This code can create instances of low density parity check code decoding (i.e. the check matrix and the syndrome) and turn such an instance into a factor graph (single check per factor)
@@ -17,31 +23,55 @@ from os.path import isfile, join
 # Description: Run BP on the instances found in the given folder
 # Inputs:	- folder: name of the folder to pull instances from... string
 #			- solver: which solver to use... function
+#			- pool_size: how many threads to start (1 by default, so no concurrency)
 #			- verbose: whether to print what's happening or not... bool
 # Outputs:	- the solutions found for each instance
 #===================================================
-def runBP(folder = 'insts', solver = sa, verbose = True, regionalize = True, pool_size = 1):
+def runBP(folder = '../insts', solver = sa, pool_size = 1, verbose = True):
 
 	sols = []
 	dist = []
 	if verbose: print('Loading instances from: ' + folder)
-	insts = load_insts(folder)
+	problems = load_problems(folder)
 
-	for inst in insts:
-		if verbose: print('Running: ' + inst['name'])
+	for (fn, problem) in problems:
+		graph = problem['graph']
 
-		graph = create_factor_graph(inst['H'], array(inst['y1'].transpose(), dtype = int))#array(inst['H'].dot(inst['y1'].transpose()) % 2, dtype = int))
-		graph.solver = solver
+		if verbose: print('Running: ' + fn)
+		[bits, rgns, errs] = re.split('bits|rgns|error', fn)[:-1]
 
-		if regionalize: graph = graph.regionalize(recurs = False, frac_regions = 0.2)
+		jump_in = False
+		fn_ = ''
+		for file in listdir('../results'):
+			if fnmatch(file, bits + 'bits' + rgns + 'rgns' + errs + 'error_solver=' + solver.__name__ + '*.pickle'):
+				jump_in = True
+				fn_ = file
 
-		if verbose: print('Created the Factor Graph with (# variables, # factors): ' + str((graph.num_variables, graph.num_factors)))
-		sol, _ = min_sum_BP(graph, solver, verbose = verbose, pool_size = pool_size)
-		sols += [sol]
-		dist += [norm(array(sol) - inst['y'])]
+		if not jump_in:
 
-	return sols, dist
+			#graph = create_factor_graph(inst['H'], array(inst['y1'].transpose(), dtype = int))#array(inst['H'].dot(inst['y1'].transpose()) % 2, dtype = int))
+			graph.solver = solver
 
+			#if num_regions != False: graph = graph.regionalize(recurs = False, num_regions = num_regions if num_regions != -1 else int(rgns))
+
+			#if verbose: print('Created the Factor Graph with (# variables, # factors): ' + str((graph.num_variables, graph.num_factors)))
+			sol, num_iters = min_sum_BP(graph, solver, verbose = verbose, pool_size = pool_size)
+
+		else:
+
+			f = open('../results/' + fn)
+			x = load(f)
+			f.close()
+
+			if verbose: print('Jumping back into this factor graph at iteration: ' + str(x['iterations']))
+
+			graph = x['graph']
+			sol, num_iters = min_sum_BP(graph, solver, verbose = verbose, pool_size = pool_size, jump_in = True, max_iter = 1000 - x['iterations'])
+			num_iters += x['iterations']
+
+		sol = array(spin_2_bin(sol))
+		dist = sum((sol - problem['solution'][0]) % 2)
+		save(bits + 'bits' + rgns + 'rgns' + errs + 'error_solver=' + solver.__name__, {'solution': sol, 'true_solution': problem['solution'][0], 'dist': dist, 'graph': graph, 'iterations': num_iters})
 
 
 
@@ -63,6 +93,7 @@ def create_factor_graph(H, s = None, ising = True):
 	for check in H:
 		bits = []
 
+		# this could be done with numpy.nonzero(check)
 		for bit in range(len(check)):
 			if check[bit] == 1: bits += [bit]
 
@@ -82,7 +113,7 @@ def parity_check_ham(bits, anc_start):
 
 	# 2 bits just need to agree
 	if len(bits) == 2:
-		potential[bits[0], bits[1]] = 1
+		potential[bits[0], bits[1]] = -1
 		potential['num vars'] = 2
 
 	elif len(bits) == 3:
@@ -107,32 +138,84 @@ def parity_check_ham(bits, anc_start):
 		potential[bits[2], ancs[2]] = -1
 
 		potential['num vars'] = 6
-	else: 
 
-		# break into sets of 3-bit parity checks on 2 decision variables and an ancilla 
-		num_checks = int(len(bits)/2)
-		ancs = [anc_start + i for i in range(num_checks)]
+
+	elif len(bits) == 4:#% 4 == 0: 
+
+		# break each 4 into 2 sets of 3-bit parity checks on 2 decision variables and a shared ancilla
+		# a + b + c + d = (a + b + x) + (c + d + x) (mod 2)
+		num_checks = len(bits)/2
+		ancs = [anc_start + i for i in range(num_checks/2)]
 
 		for a in range(num_checks):
-			pot, anc = parity_check_ham(bits[2*a: 2*a + 2] + ancs[a:a+1], anc_start + num_checks + 3*a)
+			pot, anc = parity_check_ham(bits[2*a: 2*a + 2] + ancs[int(a/2) : int(a/2) + 1], anc_start + len(ancs))
 			ancs += anc
-
-			num = potential['num vars'] + pot['num vars']
 			potential.update(pot)
-			potential['num vars'] = num
+
+	elif len(bits) == 5:#% 5 == 0:
+
+		# break into 3 sets of 3-bit parity checks on 2 decision variables and 2 shared ancillas
+		# a + b + c + d + e= (a + b + x) + (c + d + y) + (e + x + y) (mod 2)
+		ancs = [anc_start, anc_start + 1]
+
+		pot, anc = parity_check_ham(bits[:2] + [anc_start], anc_start + 2)
+		ancs += anc
+		potential.update(pot)
+
+		pot, anc = parity_check_ham(bits[2:4] + [anc_start + 1], anc_start + len(ancs))
+		ancs += anc
+		potential.update(pot)
+
+		pot, anc = parity_check_ham(bits[4:] + [anc_start, anc_start + 1], anc_start + len(ancs))
+		ancs += anc
+		potential.update(pot)
+
+	else:
+		print('This size (' + str(len(bits)) + ') parity check is not currently supported')
+		return False
 
 
-		# if the number of bits is odd, we need an extra check for the last variable
-		if len(bits) % 2 != 0:
-			pot, anc = parity_check_ham([bits[-1], ancs[-2], ancs[-1]], ancs[-1] + 1)
-			ancs += anc
 
-			num = potential['num vars'] + pot['num vars']
-			potential.update(pot)
-			potential['num vars'] = num
+	get_num_vars(potential)
 
 	return potential, ancs
 
+
+def test_checks(num_bits):
+
+	bits = range(num_bits)
+	pot, ancs = parity_check_ham(bits, len(bits))
+
+	J, const = dict_2_mat(pot)
+	h = diag(J).copy()
+	fill_diagonal(J, 0.0)
+
+	res = []
+	for st in product([-1, 1], repeat = pot['num vars']):
+		st = array(st)
+		res += [h.dot(st) + st.dot(J.dot(st.transpose())) + const]
+
+	res = array(res)
+	inds = argsort(res)
+	lowest = min(res)
+
+	#print(res[inds][:16])
+
+	states = []
+	for i in range(len(res)):
+		if res[inds[i]] == lowest:
+			r = inds[i]
+			state = [0 for j in range(pot['num vars'])]
+			for j in range(len(state))[::-1]:
+				state[j] = r % 2
+				r = int(r/2)
+
+			state = [state[pot['mapping'][j]] for j in range(len(state))]
+			states += [state[:num_bits]]
+		else: break
+
+
+	return states, [sum(states[i]) % 2 for i in range(len(states))]
 
 # Description: load instances from the given folder
 # Inputs:	- folder: name of the folder to pull instances from... string
@@ -143,12 +226,57 @@ def load_insts(folder):
 	insts = []
 
 	for f in listdir(folder):
-		if isfile(join(folder, f)):
+		if isfile(join(folder, f)) and '.mat' in f:
 			inst = loadmat(join(folder, f))
 			insts += [{'H': inst['H'], 'G': inst['G'], 'y': inst['y'], 'y1': inst['y1'], 'name': f}]
 
 	return insts
 
+
+def load_problems(folder):
+
+	graphs = []
+
+	for fn in listdir(folder):
+		if isfile(join(folder, fn)) and 'graph.pickle' in fn:
+			f = open(join(folder, fn))
+			graphs += [(fn, load(f))]
+			f.close()
+
+	return graphs
+
+
+def create_graphs():
+
+	insts = load_insts('../insts')
+
+	for inst in insts:
+
+		print('Running: ' + inst['name'])
+		[bits, rgns, errs] = re.split('bits|rgns|error', inst['name'])[:-1]
+
+		graph = create_factor_graph(inst['H'], bin_2_spin(list(inst['y1'][0])))#array(inst['H'].dot(inst['y1'].transpose()) % 2, dtype = int))
+		graph = graph.regionalize(recurs = False, num_regions = int(rgns))
+
+		print('Created the Factor Graph with (# variables, # factors): ' + str((graph.num_variables, graph.num_factors)))
+
+		f = open('../insts/' + bits + 'bits' + rgns + 'rgns' + errs + 'error_graph.pickle', 'wb')
+		dump({'graph': graph, 'solution': inst['y'][0], 'input': inst['y1'][0]}, f)
+		f.close()
+
+
+def save(name, data):
+
+    i = 0
+    while True:
+        if isfile('../results/' + name + '_' + str(i) + '.pickle'):
+            i += 1
+        else:
+            f = open('../results/' + name + '_' + str(i) + '.pickle', 'wb')
+            break
+
+    dump(data, f)
+    f.close()
 
 
 

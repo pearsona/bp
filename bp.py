@@ -1,6 +1,7 @@
 from FactorGraph import *
 from solvers import *
 
+import datetime
 
 #=====================
 # Running min-sum BP #
@@ -14,56 +15,80 @@ from solvers import *
 #			- verbose: print everything or nothing... bool
 # Output:	- answer from BP and number of iterations taken to find it
 #=====================
-def min_sum_BP(g = None, solv = brute_force, init_mess = {}, max_iter = 1000, verbose = False, pool_size = 1):
+def min_sum_BP(g = None, solv = brute_force, init_mess = {}, max_iter = 1000, verbose = False, pool_size = 1, jump_in = False):
 
 	# A default example meant to illustrate the various capabilities and parameters of a factor graph with solution = [1,1,1]
 	if g is None:
 		g = FactorGraph(solver = solv, states = [0, 1], threshold = 0.1)
 
+		#g.add_variables(3, [0, 0, 0]) # to test starting with bad initial conditions
+
 		g.add_factor({'const': -1.0, 0: -1.0, 1: -1.0, (0, 1): -1.0, 'num vars': 2})
 		g.add_factor({'const': -2.0, 1: 1.0, (1, 2): -3.0, 'num vars': 2})
 
-		g.qubo_2_ising()
+		#g.qubo_2_ising()
 
 		if verbose: print('created an ising factor graph '  + str(list(g)))
 
+	if not jump_in:
 
-	g.initialize(init_mess)
-	state = []
-	if verbose: print('initialized')
+		g.initialize(init_mess)
+		state = g.get_best_state()
+		if verbose: print('initialized')
+
+		num_iters = 0
+	else:
+
+		state = g.get_best_state()
+
+	fixed_state = 0	
+
+
 
 	# Iteratively run BP
 	for i in range(max_iter):
 
+		num_iters = i + 1
 		try:
 
-			if verbose: print('\n\niteration: ' + str(i))
+			print('\n\n' + str(datetime.datetime.now()) + '\niteration: ' + str(i))
 
-			if verbose: print('\n1) sending factor -> variable messages')
+			if verbose: print('\n' + str(datetime.datetime.now()) + '\n1) sending factor -> variable messages')
 			g.all_factors_to_variables(verbose, pool_size)
+			#raw_input('Press enter to continue: ')
 
-			if verbose: print('\n2) updating beliefs')
-			changed = g.update_all_beliefs(verbose, pool_size)
+			if verbose: print('\n' + str(datetime.datetime.now()) + '\n2) updating beliefs')
+			num = g.update_all_beliefs(verbose, pool_size)
+			#raw_input('Press enter to continue: ')
 
-			if not changed and i > 0:
+			if num == 0 and i > 0:
 				if verbose: print('\nWe seem to have found the answer in just ' + str(i + 1) + '/' + str(max_iter) + ' runs')
-				return g.get_best_state(), i + 1
+				break
 
 
-			if verbose: print('\n3) sending variable -> factor messages')
+			if verbose: print('\n' + str(datetime.datetime.now()) + '\n3) sending variable -> factor messages')
 			g.all_variables_to_factors(verbose, pool_size)
+			#raw_input('Press enter to continue: ')
 
 			old_state = list(state)
 			state = g.get_best_state()
-			if verbose: print('\ncurrent best state: ' + str(state))
+			if verbose: print('\n' + str(datetime.datetime.now()) + '\ncurrent best state: ' + str(state))
 
-		except KeyboardInterrupt:
+			# If the state hasn't changed in 10 iterations, it seems reasonable to exit
+			if old_state == state: fixed_state += 1
+			else: fixed_state = 0
+
+			if fixed_state == 10: break
+
+		except KeyboardInterrupt as err:
+
+			print(err)
 
 			state = g.get_best_state()
-			if verbose: print('\n\nexiting... current best state:' + str(state))
-			return state, i + 1
+			if verbose: print('\n\n' + str(datetime.datetime.now()) + '\nExiting early at ' + str(i + 1), ' iterations... current best state:' + str(state))
+			break
 
+	if verbose: print('\n\n' + str(datetime.datetime.now()) + '\nFinished BP, will now use these results to determine a solution (will require solving each factor once more)...\n')
 
-	if verbose:  print('We ran through all ' + str(max_iter) + ' runs and got the answer: ' + str(state))
-	return state, max_iter
+	return g.finish(pool_size), num_iters
 
