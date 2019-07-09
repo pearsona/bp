@@ -1,6 +1,8 @@
+# BP Stuff
 from FactorGraph import *
 from solvers import *
 
+# Used for formatting the output messages
 import datetime
 
 #=====================
@@ -13,7 +15,10 @@ import datetime
 #			- init_mess: messages to initialize each node with... dictionary (key = node sending message) of dictionaries (key = node receiving message) of dictionaries (keys = states)... (sorry)
 #			- max_iter: maximum number of iterations before termination... int
 #			- verbose: print everything or nothing... bool
+#			- pool_size: how many processes to use (default = 1 means no multiprocessing)... int
+#			- jump_in: whether or not we are jumping into a previously started run... bool
 # Output:	- answer from BP and number of iterations taken to find it
+# A nice reference:	https://pdfs.semanticscholar.org/9e00/32f75cc57a8b7b23255964561fab480b7a8b.pdf?_ga=2.252865417.1669990439.1554775842-1496842273.1554775842
 #=====================
 def min_sum_BP(g = None, solv = brute_force, init_mess = {}, max_iter = 1000, verbose = False, pool_size = 1, jump_in = False):
 
@@ -30,19 +35,20 @@ def min_sum_BP(g = None, solv = brute_force, init_mess = {}, max_iter = 1000, ve
 
 		if verbose: print('created an ising factor graph '  + str(list(g)))
 
+
+	# If we're not jumping into a previous run, then we need to initialize the graph and considering the initial messages (i.e. the noisy input)
 	if not jump_in:
 
-		g.initialize(init_mess)
-		state = g.get_best_state()
-		if verbose: print('initialized')
-
+		g.initialize(init_mess, pool_size = pool_size)
 		num_iters = 0
-	else:
+		if verbose: print('initialized')
+		
 
-		state = g.get_best_state()
+	# Get the initial guess (random if not jumping in and the guess of the previous run otherwise)
+	state = g.get_best_state()
 
 	fixed_state = 0	
-
+	g.solver = solv
 
 
 	# Iteratively run BP
@@ -51,12 +57,19 @@ def min_sum_BP(g = None, solv = brute_force, init_mess = {}, max_iter = 1000, ve
 		num_iters = i + 1
 		try:
 
-			print('\n\n' + str(datetime.datetime.now()) + '\niteration: ' + str(i))
+
+			# Sending factor to variable messages
+			if verbose: print('\n\n' + str(datetime.datetime.now()) + '\niteration: ' + str(i))
 
 			if verbose: print('\n' + str(datetime.datetime.now()) + '\n1) sending factor -> variable messages')
+
 			g.all_factors_to_variables(verbose, pool_size)
 			#raw_input('Press enter to continue: ')
 
+
+
+			# Updating beliefs
+			# Stop iterating if no beliefs changed (and we've done at least 1 iteration)
 			if verbose: print('\n' + str(datetime.datetime.now()) + '\n2) updating beliefs')
 			num = g.update_all_beliefs(verbose, pool_size)
 			#raw_input('Press enter to continue: ')
@@ -66,21 +79,29 @@ def min_sum_BP(g = None, solv = brute_force, init_mess = {}, max_iter = 1000, ve
 				break
 
 
+			# Sending variable to factor messages
 			if verbose: print('\n' + str(datetime.datetime.now()) + '\n3) sending variable -> factor messages')
 			g.all_variables_to_factors(verbose, pool_size)
 			#raw_input('Press enter to continue: ')
 
+
+			# Determine the best guess after this round of message passing
 			old_state = list(state)
 			state = g.get_best_state()
 			if verbose: print('\n' + str(datetime.datetime.now()) + '\ncurrent best state: ' + str(state))
 
+
 			# If the state hasn't changed in 10 iterations, it seems reasonable to exit
+			# This was a criterion used in the 2014 work that is not strictly theoretically sound, but seems reasonable (particularly for loopy BP)
 			if old_state == state: fixed_state += 1
 			else: fixed_state = 0
 
+			if verbose: print('\nWe have had this state for ' + str(fixed_state) + ' iterations')
+
 			if fixed_state == 10: break
 
-		except KeyboardInterrupt as err:
+		# Allow us to exit BP in the middle, but save our place (have had some issues with this and multiprocessing)
+		except (KeyboardInterrupt, TimeoutError) as err:
 
 			print(err)
 
@@ -90,5 +111,8 @@ def min_sum_BP(g = None, solv = brute_force, init_mess = {}, max_iter = 1000, ve
 
 	if verbose: print('\n\n' + str(datetime.datetime.now()) + '\nFinished BP, will now use these results to determine a solution (will require solving each factor once more)...\n')
 
+
+
+	# Call the finish function, which solves each region internally and returns a solution
 	return g.finish(pool_size), num_iters
 

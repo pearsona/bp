@@ -145,13 +145,6 @@ def spin_2_bin(vec):
 
 
 
-# Description: Take a truth table potential and turn it into a potential dictionary as used in this file
-# Inputs:	- table: a description of the truth table potential... dictionary (key = state of variables, value = potential)
-# Outputs:	- the qubo potential in terms of the variables... dictionary
-#=====================
-def truth_table_2_qubo(table): pass
-
-
 
 
 # Description: Turn a potential dictionary into a matrix equivalent
@@ -255,6 +248,8 @@ def get_num_vars(pot):
 	return len(xs)
 
 
+
+
 def dwave_prepare(pot):
 
 	if 'mapping' not in pot: map_vars(pot)
@@ -290,4 +285,14 @@ def dwave_prepare(pot):
 
 
 
+def evaluate(pot, state):
 
+	e = 0
+	for k in pot:
+		if k == 'const': e += pot[k]
+		elif type(k) == type(0): e += pot[k]*state[k]
+		elif type(k) == type((0, 0)):
+			a, b = k
+			e += pot[k]*state[a]*state[b]
+
+	return e
